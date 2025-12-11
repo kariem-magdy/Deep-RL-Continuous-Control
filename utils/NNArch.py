@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
+import numpy as np
 
 class CNNFeatureExtractor(nn.Module):
     """
@@ -19,7 +20,8 @@ class CNNFeatureExtractor(nn.Module):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)
+        # CRITICAL FIX: Use .reshape() instead of .view()
+        x = x.reshape(x.size(0), -1)
         return F.relu(self.fc(x))
 
 class GaussianPolicy(nn.Module):
@@ -38,11 +40,20 @@ class GaussianPolicy(nn.Module):
         self.log_std = nn.Linear(hidden_dim, action_dim)
 
         if action_space is None:
-            self.scale = torch.tensor(1.0)
-            self.bias = torch.tensor(0.0)
+            # scalar defaults if no action space provided
+            self.register_buffer('scale', torch.tensor(1.0))
+            self.register_buffer('bias', torch.tensor(0.0))
         else:
-            self.register_buffer('scale', torch.FloatTensor((action_space.high - action_space.low) / 2.))
-            self.register_buffer('bias', torch.FloatTensor((action_space.high + action_space.low) / 2.))
+            # CRITICAL FIX: Sanitize action_space bounds to prevent NaNs
+            high = torch.from_numpy(action_space.high).float()
+            low = torch.from_numpy(action_space.low).float()
+            
+            # Replace NaNs/Infs with safe defaults [-1, 1]
+            high = torch.nan_to_num(high, nan=1.0, posinf=1.0, neginf=-1.0)
+            low = torch.nan_to_num(low, nan=-1.0, posinf=1.0, neginf=-1.0)
+
+            self.register_buffer('scale', (high - low) / 2.)
+            self.register_buffer('bias', (high + low) / 2.)
 
     def forward(self, x):
         if self.use_cnn:
@@ -60,6 +71,7 @@ class GaussianPolicy(nn.Module):
         action = y_t * self.scale + self.bias
         
         log_prob = dist.log_prob(x_t)
+        # adjust log prob for tanh squashing and scaling (numerical stability)
         log_prob -= torch.log(self.scale * (1 - y_t.pow(2)) + 1e-6)
         log_prob = log_prob.sum(1, keepdim=True)
         
