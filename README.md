@@ -1,4 +1,4 @@
-# 🤖 Deep-RL-Continuous-Control
+# 🤖 TD3/SAC/PPO-for-Continuous-Control-Tasks
 
 <div align="center">
 
